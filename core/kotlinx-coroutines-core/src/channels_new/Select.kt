@@ -1,11 +1,10 @@
 package channels_new
 
+import kotlinx.atomicfu.AtomicLong
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendAtomicCancellableCoroutine
 import java.util.*
-import java.util.concurrent.ThreadLocalRandom
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.Continuation
 import kotlin.math.min
 
@@ -94,16 +93,6 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      * Shuffles alternatives for [selectUnbiased].
      */
     fun shuffleAlternatives() {
-        return
-        // This code is based on `Collections#shuffle`,
-        // just adapted to our purposes only.
-        val size = alternatives.size / ALTERNATIVE_SIZE
-        for (i in size - 1 downTo 1) {
-            val j = ThreadLocalRandom.current().nextInt(i + 1)
-            for (offset in 0 until ALTERNATIVE_SIZE) {
-                Collections.swap(alternatives, i * ALTERNATIVE_SIZE + offset, j * ALTERNATIVE_SIZE + offset)
-            }
-        }
     }
     /**
      * Performs `select` in 3-phase way. At first it selects an alternative atomically
@@ -197,7 +186,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
         error("Channel $channel is not found")
     }
     companion object {
-        @JvmStatic private val selectInstanceIdGenerator = atomic(0L)
+        private val selectInstanceIdGenerator = java.util.concurrent.atomic.AtomicLong(0L)
         // Number of items to be stored for each alternative in `alternatives` array.
         const val ALTERNATIVE_SIZE = 4
 
