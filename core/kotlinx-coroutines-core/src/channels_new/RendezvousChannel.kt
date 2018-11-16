@@ -469,7 +469,7 @@ class RendezvousChannel<E> : Channel<E> {
     override val onSend: Param1RegInfo<Unit> = Param1RegInfo<Unit>(this, RendezvousChannel<*>::regSelectSend, Companion::actOnSendAndOnReceive)
     override val onReceive: Param0RegInfo<E> = Param0RegInfo<E>(this, RendezvousChannel<*>::regSelectReceive, Companion::actOnSendAndOnReceive)
 
-    private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?): RegResult? {
+    private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?) {
         while (true) {
             var head = head()
             var tail = tail()
@@ -510,17 +510,22 @@ class RendezvousChannel<E> : Channel<E> {
                     cont as CancellableContinuation<in E>
                     if (!cont.tryResumeCont(element as E)) { continue }
                     selectInstance.setState(RECEIVER_ELEMENT)
-                    return null
+                    selectInstance.index = 0
+                    selectInstance.cleanable = null
+                    return
                 } else {
                     cont as SelectInstance<*>
                     val status = cont.trySelect(this, element!!, selectInstance)
                     if (status == SelectInstance.TRY_SELECT_FAIL) continue
                     if (status == SelectInstance.TRY_SELECT_SUCCESS) {
                         selectInstance.setState(RECEIVER_ELEMENT)
-                        return null
+                        selectInstance.index = 0
+                        selectInstance.cleanable = null
+                        return
                     }
                     if (status == SelectInstance.TRY_SELECT_CONFIRM) {
-                        return SelectInstance.REG_RESULT_CONFIRMED
+                        selectInstance.index = SelectInstance.TRY_SELECT_CONFIRM
+                        return
                     }
                 }
             } else {
@@ -530,12 +535,14 @@ class RendezvousChannel<E> : Channel<E> {
                     tail.putCont(i, null)
                     continue
                 }
-                return RegResult(tail, i)
+                selectInstance.index = i
+                selectInstance.cleanable = tail
+                return
             }
         }
     }
 
-    private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?): RegResult? {
+    private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?) {
         while (true) {
             var head = head()
             var tail = tail()
@@ -578,17 +585,22 @@ class RendezvousChannel<E> : Channel<E> {
                     cont as CancellableContinuation<Unit>
                     if (!cont.tryResumeCont(Unit)) continue
                     selectInstance.setState(el)
-                    return null
+                    selectInstance.index = 0
+                    selectInstance.cleanable = null
+                    return
                 } else {
                     cont as SelectInstance<*>
                     val status = cont.trySelect(this, RECEIVER_ELEMENT, selectInstance)
                     if (status == SelectInstance.TRY_SELECT_FAIL) continue
                     if (status == SelectInstance.TRY_SELECT_SUCCESS) {
                         selectInstance.setState(el)
-                        return null
+                        selectInstance.index = 0
+                        selectInstance.cleanable = null
+                        return
                     }
                     if (status == SelectInstance.TRY_SELECT_CONFIRM) {
-                        return SelectInstance.REG_RESULT_CONFIRMED
+                        selectInstance.index = SelectInstance.TRY_SELECT_CONFIRM
+                        return
                     }
                 }
             } else {
@@ -598,7 +610,9 @@ class RendezvousChannel<E> : Channel<E> {
                     tail.putCont(i, null)
                     continue
                 }
-                return RegResult(tail, i)
+                selectInstance.index = i
+                selectInstance.cleanable = tail
+                return
             }
         }
     }

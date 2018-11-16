@@ -30,40 +30,42 @@ interface SelectBuilder<RESULT> {
 }
 
 // channel, selectInstance, element -> is selected by this alternative
-typealias RegFunc = Function3<RendezvousChannel<*>, SelectInstance<*>, Any?, RegResult?>
-class Param0RegInfo<FUNC_RESULT>(
+typealias RegFunc = Function3<RendezvousChannel<*>, SelectInstance<*>, Any?, Unit>
+class Param0RegInfo<FUNC_RESULT>(channel: Any, regFunc: RegFunc, actFunc: ActFunc<FUNC_RESULT>)
+    : RegInfo<FUNC_RESULT>(channel, regFunc, actFunc)
+class Param1RegInfo<FUNC_RESULT>(channel: Any, regFunc: RegFunc, actFunc: ActFunc<FUNC_RESULT>)
+    : RegInfo<FUNC_RESULT>(channel, regFunc, actFunc)
+
+abstract class RegInfo<FUNC_RESULT>(
         @JvmField val channel: Any,
         @JvmField val regFunc: RegFunc,
         @JvmField val actFunc: ActFunc<FUNC_RESULT>
 )
-class Param1RegInfo<FUNC_RESULT>(
-        @JvmField val channel: Any,
-        @JvmField val regFunc: RegFunc,
-        @JvmField val actFunc: ActFunc<FUNC_RESULT>
-)
-class RegResult(@JvmField val cleanable: Cleanable?, @JvmField val index: Int)
 // continuation, result (usually a received element), block
 typealias ActFunc<FUNC_RESULT> = Function2<Any?, Function1<FUNC_RESULT, Any?>, Any?>
 class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     private val id = selectInstanceIdGenerator.incrementAndGet()
-    private @Volatile var waitingFor: SelectInstance<*>? = null
     private val alternatives = ArrayList<Any?>()
-    lateinit var cont: Continuation<in Any>
+
     private val _state = atomic<Any?>(STATE_REG)
+
+    lateinit var cont: Continuation<in Any>
+    private @Volatile var waitingFor: SelectInstance<*>? = null
+
+    @JvmField var cleanable: Cleanable? = null
+    @JvmField var index: Int = 0
 
     fun setState(state: Any) { _state.value = state }
 
     override fun <FUNC_RESULT> Param0RegInfo<FUNC_RESULT>.invoke(block: (FUNC_RESULT) -> RESULT) {
-        addAlternative(channel, null, regFunc, actFunc, block)
+        addAlternative(this, null, block)
     }
     override fun <PARAM, FUNC_RESULT> Param1RegInfo<FUNC_RESULT>.invoke(param: PARAM, block: (FUNC_RESULT) -> RESULT) {
-        addAlternative(channel, param, regFunc, actFunc, block)
+        addAlternative(this, param, block)
     }
-    private fun <FUNC_RESULT> addAlternative(channel: Any, param: Any?, regFunc: Any, actFunc: ActFunc<FUNC_RESULT>, block: (FUNC_RESULT) -> RESULT) {
-        alternatives.add(channel)
+    private fun <FUNC_RESULT> addAlternative(regInfo: RegInfo<*>, param: Any?, block: (FUNC_RESULT) -> RESULT) {
+        alternatives.add(regInfo)
         alternatives.add(param)
-        alternatives.add(regFunc)
-        alternatives.add(actFunc)
         alternatives.add(block)
         alternatives.add(null)
         alternatives.add(null)
@@ -98,21 +100,20 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      */
     private suspend fun selectAlternative(): Any? {
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-            val channel = alternatives[i]!!
+            val regInfo = alternatives[i]!! as RegInfo<*>
             val param = alternatives[i + 1]
-            val regFunc = alternatives[i + 2]
-            regFunc as RegFunc
-            channel as RendezvousChannel<*> // todo FIX TYPES
-            val regResult = regFunc(channel, this, param)
-            if (regResult == null) { // rendezvous
+            val regFunc = regInfo.regFunc
+            val channel = regInfo.channel as RendezvousChannel<*> // todo FIX TYPES
+            regFunc(channel, this, param)
+            if (index == TRY_SELECT_CONFIRM) {
+                break
+            } else if (cleanable == null) {
                 val result = this._state.value
                 this._state.value = channel
                 return result
-            } else if (regResult == REG_RESULT_CONFIRMED) {
-                break
             } else {
-                alternatives[i + 6] = regResult.index
-                alternatives[i + 5] = regResult.cleanable
+                alternatives[i + 3] = index
+                alternatives[i + 4] = cleanable
             }
         }
         return suspendAtomicCancellableCoroutine<Any> { cont ->
@@ -158,8 +159,8 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      */
     private fun cleanNonSelectedAlternatives() {
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-            val cleanable = alternatives[i + 5]
-            val index = alternatives[i + 6]
+            val cleanable = alternatives[i + 4]
+            val index = alternatives[i + 3]
             // `cleanable` can be null in case this alternative has not been processed.
             // This means that the next alternatives has not been processed as well.
             if (cleanable === null) break
@@ -173,8 +174,8 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      */
     private fun invokeSelectedAlternativeAction(result: Any?): RESULT {
         val i = selectedAlternativeIndex()
-        val actFunc = alternatives[i + 3] as ActFunc<in Any>
-        val block = alternatives[i + 4] as (Any?) -> RESULT
+        val actFunc = (alternatives[i] as RegInfo<*>).actFunc as ActFunc<in Any>
+        val block = alternatives[i + 2] as (Any?) -> RESULT
         return actFunc(result, block) as RESULT
     }
     /**
@@ -183,20 +184,18 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     private fun selectedAlternativeIndex(): Int {
         val channel = _state.value!!
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-            if (alternatives[i] === channel) return i
+            if ((alternatives[i] as RegInfo<*>).channel === channel) return i
         }
         error("Channel $channel is not found")
     }
     companion object {
-        @JvmStatic private val selectInstanceIdGenerator = AtomicLong()
+        @JvmStatic private val selectInstanceIdGenerator = atomic(0L)
         // Number of items to be stored for each alternative in `alternatives` array.
-        const val ALTERNATIVE_SIZE = 7
+        const val ALTERNATIVE_SIZE = 5
 
         const val TRY_SELECT_SUCCESS = 0
         const val TRY_SELECT_FAIL = 1
-        const val TRY_SELECT_CONFIRM = 2
-
-        val REG_RESULT_CONFIRMED = RegResult(null, 0)
+        const val TRY_SELECT_CONFIRM = -1
 
         val STATE_REG = Any()
         val STATE_WAITING = Any()
