@@ -1,13 +1,10 @@
 package benchmarks.channel
 
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.InternalCoroutinesApi
 import channels_new.*
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.scheduling.ExperimentalCoroutineDispatcher
+import kotlinx.coroutines.*
 import org.openjdk.jmh.annotations.*
 import org.openjdk.jmh.infra.Blackhole
+import java.util.concurrent.Executors
 import java.util.concurrent.Phaser
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
@@ -33,7 +30,7 @@ open class ChannelProdConsBenchmark {
     @InternalCoroutinesApi
     @Setup
     fun setup() {
-        dispatcher = ExperimentalCoroutineDispatcher(corePoolSize = _3_parallelism)
+        dispatcher = Executors.newFixedThreadPool(_3_parallelism).asCoroutineDispatcher()
     }
 
     @Benchmark
