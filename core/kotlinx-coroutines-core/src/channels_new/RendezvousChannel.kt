@@ -128,6 +128,7 @@ class RendezvousChannel<E> : Channel<E> {
     // specifies an index in the node.
     private val _highest = atomic(0L)
     private val _lowest  = atomic(0L)
+    private val _lock = atomic(0)
 
     init {
         // Initialize queue with empty node similar to MS queue
@@ -148,10 +149,16 @@ class RendezvousChannel<E> : Channel<E> {
                 var head = head()
                 var tail = tail()
 
-                val h1 = _highest.value
+                _lock.incrementAndGet()
+                while (_lock.value > wlocked) {}
                 val l = _lowest.addAndGet(1L shl _counterOffset)
-                val h2 = _highest.value
-                check(h1 == h2)
+                val h1 = _highest.value
+                _lock.decrementAndGet()
+
+//                val h1 = _highest.value
+//                val l = _lowest.addAndGet(1L shl _counterOffset)
+//                val h2 = _highest.value
+//                check(h1 == h2)
 
                 val ls = l ushr  _counterOffset
                 val lr = l and _counterMask
@@ -159,6 +166,8 @@ class RendezvousChannel<E> : Channel<E> {
                 val hr = h1 and _counterMask
                 val s = ls + (hs shl (_counterOffset - 1))
                 val r = lr + (hr shl (_counterOffset - 1))
+
+                if (ls > _minOverflowedValue) error(":(")
 
                 val i = (s % segmentSize).toInt()
                 if (s <= r) {
@@ -214,10 +223,16 @@ class RendezvousChannel<E> : Channel<E> {
                 var head = head()
                 var tail = tail()
 
-                val h1 = _highest.value
+                _lock.incrementAndGet()
+                while (_lock.value > wlocked) {}
                 val l = _lowest.addAndGet(1L)
-                val h2 = _highest.value
-                check(h1 == h2)
+                val h1 = _highest.value
+                _lock.decrementAndGet()
+
+//                val h1 = _highest.value
+//                val l = _lowest.addAndGet(1L)
+//                val h2 = _highest.value
+//                check(h1 == h2)
 
                 val ls = l ushr _counterOffset
                 val lr = l and _counterMask
@@ -225,6 +240,9 @@ class RendezvousChannel<E> : Channel<E> {
                 val hr = h1 and _counterMask
                 val s = ls + (hs shl (_counterOffset - 1))
                 val r = lr + (hr shl (_counterOffset - 1))
+
+                if (lr > _minOverflowedValue) error(":(")
+
 
                 val i = (r % segmentSize).toInt()
                 if (r <= s) {
@@ -356,10 +374,16 @@ class RendezvousChannel<E> : Channel<E> {
             var head = head()
             var tail = tail()
 
-            val h1 = _highest.value
+            _lock.incrementAndGet()
+            while (_lock.value > wlocked) {}
             val l = _lowest.addAndGet(1L shl _counterOffset)
-            val h2 = _highest.value
-            check(h1 == h2)
+            val h1 = _highest.value
+            _lock.decrementAndGet()
+
+//            val h1 = _highest.value
+//            val l = _lowest.addAndGet(1L shl _counterOffset)
+//            val h2 = _highest.value
+//            check(h1 == h2)
 
             val ls = l ushr  _counterOffset
             val lr = l and _counterMask
@@ -367,6 +391,8 @@ class RendezvousChannel<E> : Channel<E> {
             val hr = h1 and _counterMask
             val s = ls + (hs shl (_counterOffset - 1))
             val r = lr + (hr shl (_counterOffset - 1))
+
+            if (ls > _minOverflowedValue) error(":(")
 
             val i = (s % segmentSize).toInt()
             if (s <= r) {
@@ -414,10 +440,16 @@ class RendezvousChannel<E> : Channel<E> {
             var head = head()
             var tail = tail()
 
-            val h1 = _highest.value
+            _lock.incrementAndGet()
+            while (_lock.value > wlocked) {}
             val l = _lowest.addAndGet(1L)
-            val h2 = _highest.value
-            check(h1 == h2)
+            val h1 = _highest.value
+            _lock.decrementAndGet()
+
+//            val h1 = _highest.value
+//            val l = _lowest.addAndGet(1L)
+//            val h2 = _highest.value
+//            check(h1 == h2)
 
             val ls = l ushr _counterOffset
             val lr = l and _counterMask
@@ -425,6 +457,9 @@ class RendezvousChannel<E> : Channel<E> {
             val hr = h1 and _counterMask
             val s = ls + (hs shl (_counterOffset - 1))
             val r = lr + (hr shl (_counterOffset - 1))
+
+            if (lr > _minOverflowedValue) error(":(")
+
 
             val i = (r % segmentSize).toInt()
 
@@ -491,3 +526,5 @@ const val segmentSize = 32
 const val _counterOffset = 30 // 32
 const val _counterMask = (1L shl _counterOffset) - 1L
 const val _minOverflowedValue = 1L shl (_counterOffset - 1)
+
+const val wlocked = 1 shl 29
