@@ -143,7 +143,7 @@ class RendezvousChannel<E> : Channel<E> {
         // invoke suspend implementation if it is not succeed.
         var t = 0
         while (true) {
-            if (t >= 5) break
+            if (t >= 2) break
 
             var head = head()
 
@@ -202,16 +202,10 @@ class RendezvousChannel<E> : Channel<E> {
                 var head = head()
                 var tail = tail()
 
-                _lock.incrementAndGet()
-                while (_lock.value > wlocked) {}
-                val l = _lowest.addAndGet(1L shl _counterOffset)
                 val h1 = _highest.value
-                _lock.decrementAndGet()
-
-//                val h1 = _highest.value
-//                val l = _lowest.addAndGet(1L shl _counterOffset)
-//                val h2 = _highest.value
-//                check(h1 == h2)
+                val l = _lowest.addAndGet(1L shl _counterOffset)
+                val h2 = _highest.value
+                check(h1 == h2)
 
                 val ls = l ushr  _counterOffset
                 val lr = l and _counterMask
@@ -269,7 +263,7 @@ class RendezvousChannel<E> : Channel<E> {
         // invoke suspend implementation if it is not succeed.
         var t = 0
         while (true) {
-            if (t >= 5) break
+            if (t >= 2) break
 
             var head = head()
 
@@ -325,16 +319,10 @@ class RendezvousChannel<E> : Channel<E> {
                 var head = head()
                 var tail = tail()
 
-                _lock.incrementAndGet()
-                while (_lock.value > wlocked) {}
-                val l = _lowest.addAndGet(1L)
                 val h1 = _highest.value
-                _lock.decrementAndGet()
-
-//                val h1 = _highest.value
-//                val l = _lowest.addAndGet(1L)
-//                val h2 = _highest.value
-//                check(h1 == h2)
+                val l = _lowest.addAndGet(1L)
+                val h2 = _highest.value
+                check(h1 == h2)
 
                 val ls = l ushr _counterOffset
                 val lr = l and _counterMask
@@ -474,16 +462,10 @@ class RendezvousChannel<E> : Channel<E> {
             var head = head()
             var tail = tail()
 
-            _lock.incrementAndGet()
-            while (_lock.value > wlocked) {}
-            val l = _lowest.addAndGet(1L shl _counterOffset)
             val h1 = _highest.value
-            _lock.decrementAndGet()
-
-//            val h1 = _highest.value
-//            val l = _lowest.addAndGet(1L shl _counterOffset)
-//            val h2 = _highest.value
-//            check(h1 == h2)
+            val l = _lowest.addAndGet(1L shl _counterOffset)
+            val h2 = _highest.value
+            check(h1 == h2)
 
             val ls = l ushr  _counterOffset
             val lr = l and _counterMask
@@ -547,16 +529,10 @@ class RendezvousChannel<E> : Channel<E> {
             var head = head()
             var tail = tail()
 
-            _lock.incrementAndGet()
-            while (_lock.value > wlocked) {}
-            val l = _lowest.addAndGet(1L)
             val h1 = _highest.value
-            _lock.decrementAndGet()
-
-//            val h1 = _highest.value
-//            val l = _lowest.addAndGet(1L)
-//            val h2 = _highest.value
-//            check(h1 == h2)
+            val l = _lowest.addAndGet(1L)
+            val h2 = _highest.value
+            check(h1 == h2)
 
             val ls = l ushr _counterOffset
             val lr = l and _counterMask
