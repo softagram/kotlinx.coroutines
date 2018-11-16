@@ -45,9 +45,10 @@ abstract class RegInfo<FUNC_RESULT>(
 typealias ActFunc<FUNC_RESULT> = Function2<Any?, Function1<FUNC_RESULT, Any?>, Any?>
 class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     private val id = selectInstanceIdGenerator.incrementAndGet()
-    private val alternatives = ArrayList<Any?>()
+    private val alternatives = ArrayList<Any?>(ALTERNATIVE_SIZE * 2)
 
     private val _state = atomic<Any?>(STATE_REG)
+    private var _result: Any? = null
 
     lateinit var cont: Continuation<in Any>
     private @Volatile var waitingFor: SelectInstance<*>? = null
@@ -64,16 +65,36 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
         addAlternative(this, param, block)
     }
     private fun <FUNC_RESULT> addAlternative(regInfo: RegInfo<*>, param: Any?, block: (FUNC_RESULT) -> RESULT) {
-        alternatives.add(regInfo)
-        alternatives.add(param)
-        alternatives.add(block)
-        alternatives.add(null)
-        alternatives.add(null)
+        if (_result != null) return
+        val regFunc = regInfo.regFunc
+        val channel = regInfo.channel as RendezvousChannel<*> // todo FIX TYPES
+        regFunc(channel, this, param)
+        if (index == TRY_SELECT_CONFIRM) {
+            alternatives.add(regInfo)
+            alternatives.add(block)
+            alternatives.add(null)
+            alternatives.add(null)
+            this._result = CONFIRMED
+        } else if (cleanable == null) {
+            val result = this._state.value
+            this._state.value = channel
+            _result = result
+            alternatives.add(regInfo)
+            alternatives.add(block)
+            alternatives.add(null)
+            alternatives.add(null)
+        } else {
+            alternatives.add(regInfo)
+            alternatives.add(block)
+            alternatives.add(index)
+            alternatives.add(cleanable)
+        }
     }
     /**
      * Shuffles alternatives for [selectUnbiased].
      */
     fun shuffleAlternatives() {
+        return
         // This code is based on `Collections#shuffle`,
         // just adapted to our purposes only.
         val size = alternatives.size / ALTERNATIVE_SIZE
@@ -99,26 +120,13 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      * and the corresponding channel is stored into `_state` field.
      */
     private suspend fun selectAlternative(): Any? {
-        for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-            val regInfo = alternatives[i]!! as RegInfo<*>
-            val param = alternatives[i + 1]
-            val regFunc = regInfo.regFunc
-            val channel = regInfo.channel as RendezvousChannel<*> // todo FIX TYPES
-            regFunc(channel, this, param)
-            if (index == TRY_SELECT_CONFIRM) {
-                break
-            } else if (cleanable == null) {
-                val result = this._state.value
-                this._state.value = channel
-                return result
-            } else {
-                alternatives[i + 3] = index
-                alternatives[i + 4] = cleanable
+        if (_result != null && _result != CONFIRMED) {
+            return _result
+        } else {
+            return suspendAtomicCancellableCoroutine<Any> { cont ->
+                this.cont = cont
+                this._state.value = STATE_WAITING
             }
-        }
-        return suspendAtomicCancellableCoroutine<Any> { cont ->
-            this.cont = cont
-            this._state.value = STATE_WAITING
         }
     }
 
@@ -159,8 +167,8 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      */
     private fun cleanNonSelectedAlternatives() {
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-            val cleanable = alternatives[i + 4]
-            val index = alternatives[i + 3]
+            val cleanable = alternatives[i + 3]
+            val index = alternatives[i + 2]
             // `cleanable` can be null in case this alternative has not been processed.
             // This means that the next alternatives has not been processed as well.
             if (cleanable === null) break
@@ -175,7 +183,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     private fun invokeSelectedAlternativeAction(result: Any?): RESULT {
         val i = selectedAlternativeIndex()
         val actFunc = (alternatives[i] as RegInfo<*>).actFunc as ActFunc<in Any>
-        val block = alternatives[i + 2] as (Any?) -> RESULT
+        val block = alternatives[i + 1] as (Any?) -> RESULT
         return actFunc(result, block) as RESULT
     }
     /**
@@ -191,14 +199,16 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     companion object {
         @JvmStatic private val selectInstanceIdGenerator = atomic(0L)
         // Number of items to be stored for each alternative in `alternatives` array.
-        const val ALTERNATIVE_SIZE = 5
+        const val ALTERNATIVE_SIZE = 4
 
         const val TRY_SELECT_SUCCESS = 0
         const val TRY_SELECT_FAIL = 1
         const val TRY_SELECT_CONFIRM = -1
 
-        val STATE_REG = Any()
-        val STATE_WAITING = Any()
-        val STATE_DONE = Any()
+        @JvmStatic  val STATE_REG = Any()
+        @JvmStatic  val STATE_WAITING = Any()
+        @JvmStatic  val STATE_DONE = Any()
+
+        @JvmStatic  val CONFIRMED = Any()
     }
 }
