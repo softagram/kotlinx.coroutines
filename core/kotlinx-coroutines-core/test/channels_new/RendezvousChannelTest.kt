@@ -13,12 +13,13 @@ abstract class AbstractRendezvousChannelTest : TestBase() {
         expect(1)
         val sender = launch {
             expect(4)
-            println("SEND 1")
+            println("SENDING 1...")
             q.send(1) // suspend -- the first to come to rendezvous
             println("SENT 1")
             expect(7)
-            println("SEND 2")
+            println("SENDING 2...")
             q.send(2) // does not suspend -- receiver is there
+            println("SENT 2")
             println("SENT 2")
             expect(8)
         }

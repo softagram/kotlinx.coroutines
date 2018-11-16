@@ -141,8 +141,61 @@ class RendezvousChannel<E> : Channel<E> {
     override suspend fun send(element: E) {
         // Try to send without suspending at first,
         // invoke suspend implementation if it is not succeed.
-//        if (offer(element)) return
+        var t = 0
+        while (true) {
+            if (t >= 5) break
 
+            var head = head()
+
+            var h1 = _highest.value
+            var l = _lowest.value
+            var h2 = _highest.value
+            while (h1 != h2) {
+                h1 = _highest.value
+                l = _lowest.value
+                h2 = _highest.value
+            }
+
+            val ls = l ushr _counterOffset
+            val lr = l and _counterMask
+            val hs = h1 ushr _counterOffset
+            val hr = h1 and _counterMask
+            var s = ls + (hs shl (_counterOffset - 1))
+            val r = lr + (hr shl (_counterOffset - 1))
+
+            if (s + 1 <= r) {
+                if (!_lowest.compareAndSet(l, l + (1L shl _counterOffset))) {
+                    t++
+                    continue
+                }
+                s++
+                val i = (s % segmentSize).toInt()
+                head = getHead(s / segmentSize, head)
+                val el = readElement(head, i)
+                if (el == BROKEN) continue
+                head.putElement(i, BROKEN)
+
+                val cont = head.getCont(i)
+                head.putCont(i, null)
+
+                if (cont == TAKEN_CONTINUATION) continue
+
+                if (cont is CancellableContinuation<*>) {
+                    cont as CancellableContinuation<in E>
+                    if (!cont.tryResumeCont(element)) {
+                        continue
+                    }
+                    return
+                } else {
+                    cont as SelectInstance<*>
+                    val trySelectRes = cont.trySelect(this, element!!, null)
+                    if (trySelectRes != SelectInstance.TRY_SELECT_SUCCESS) {
+                        continue
+                    }
+                    return
+                }
+            } else break
+        }
 
         suspendAtomicCancellableCoroutine<Unit>(holdCancellability = true) sc@ { curCont ->
             while (true) {
@@ -214,8 +267,57 @@ class RendezvousChannel<E> : Channel<E> {
     override suspend fun receive(): E {
         // Try to send without suspending at first,
         // invoke suspend implementation if it is not succeed.
-//        val res = poll()
-//        if (res != null) return res
+        var t = 0
+        while (true) {
+            if (t >= 5) break
+
+            var head = head()
+
+            var h1 = _highest.value
+            var l = _lowest.value
+            var h2 = _highest.value
+            while (h1 != h2) {
+                h1 = _highest.value
+                l = _lowest.value
+                h2 = _highest.value
+            }
+
+            val ls = l ushr _counterOffset
+            val lr = l and _counterMask
+            val hs = h1 ushr _counterOffset
+            val hr = h1 and _counterMask
+            val s = ls + (hs shl (_counterOffset - 1))
+            var r = lr + (hr shl (_counterOffset - 1))
+
+            if (r + 1 <= s) {
+                if (!_lowest.compareAndSet(l, l + 1L)) {
+                    t++
+                    continue
+                }
+                r++
+                val i = (r % segmentSize).toInt()
+                head = getHead(r / segmentSize, head)
+                val el = readElement(head, i)
+                if (el == BROKEN) continue
+                head.putElement(i, BROKEN)
+
+                val cont = head.getCont(i)
+                head.putCont(i, null)
+
+                if (cont == TAKEN_CONTINUATION) continue
+
+                if (cont is CancellableContinuation<*>) {
+                    cont as CancellableContinuation<Unit>
+                    if (!cont.tryResumeCont(Unit)) continue
+                    return el as E
+                } else {
+                    cont as SelectInstance<*>
+                    if (cont.trySelect(this, RECEIVER_ELEMENT, null) != SelectInstance.TRY_SELECT_SUCCESS) continue
+                    return el as E
+                }
+            } else break
+        }
+
 
 
         return suspendAtomicCancellableCoroutine(holdCancellability = true) sc@{ curCont ->
