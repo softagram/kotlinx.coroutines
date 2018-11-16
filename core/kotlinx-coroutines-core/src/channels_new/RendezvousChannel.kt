@@ -170,14 +170,23 @@ class RendezvousChannel<E> : Channel<E> {
                     val cont = head.getCont(i)
                     head.putCont(i, null)
 
+                    if (cont == TAKEN_CONTINUATION) continue
+
                     if (cont is CancellableContinuation<*>) {
                         cont as CancellableContinuation<in E>
-                        if (!cont.tryResumeCont(element)) continue
+                        if (!cont.tryResumeCont(element)) {
+                            continue
+                        }
                         curCont.resume(Unit)
                         return@sc
                     } else {
                         cont as SelectInstance<*>
-                        error(":(")
+                        val trySelectRes = cont.trySelect(this, element!!, null)
+                        if (trySelectRes != SelectInstance.TRY_SELECT_SUCCESS) {
+                            continue
+                        }
+                        curCont.resume(Unit)
+                        return@sc
                     }
                 } else {
                     tail = getTail(s / segmentSize, tail)
@@ -227,6 +236,8 @@ class RendezvousChannel<E> : Channel<E> {
                     val cont = head.getCont(i)
                     head.putCont(i, null)
 
+                    if (cont == TAKEN_CONTINUATION) continue
+
                     if (cont is CancellableContinuation<*>) {
                         cont as CancellableContinuation<Unit>
                         if (!cont.tryResumeCont(Unit)) continue
@@ -234,7 +245,9 @@ class RendezvousChannel<E> : Channel<E> {
                         return@sc
                     } else {
                         cont as SelectInstance<*>
-                        error(":(")
+                        if (cont.trySelect(this, RECEIVER_ELEMENT, null) != SelectInstance.TRY_SELECT_SUCCESS) continue
+                        curCont.resume(el as E)
+                        return@sc
                     }
                 } else {
                     tail = getTail(r / segmentSize, tail)
@@ -339,11 +352,120 @@ class RendezvousChannel<E> : Channel<E> {
         get() = Param0RegInfo<E>(this, RendezvousChannel<*>::regSelectReceive, Companion::actOnSendAndOnReceive)
 
     private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?): RegResult? {
-        return null
+        while (true) {
+            var head = head()
+            var tail = tail()
+
+            val h1 = _highest.value
+            val l = _lowest.addAndGet(1L shl _counterOffset)
+            val h2 = _highest.value
+            check(h1 == h2)
+
+            val ls = l ushr  _counterOffset
+            val lr = l and _counterMask
+            val hs = h1 ushr  _counterOffset
+            val hr = h1 and _counterMask
+            val s = ls + (hs shl (_counterOffset - 1))
+            val r = lr + (hr shl (_counterOffset - 1))
+
+            val i = (s % segmentSize).toInt()
+            if (s <= r) {
+                head = getHead(s / segmentSize, head)
+                val el = readElement(head, i)
+                if (el == BROKEN) continue
+                head.putElement(i, BROKEN)
+
+                val cont = head.getCont(i)
+                head.putCont(i, null)
+
+                if (cont == TAKEN_CONTINUATION) continue
+
+                if (cont is CancellableContinuation<*>) {
+                    cont as CancellableContinuation<in E>
+                    if (!cont.tryResumeCont(element as E)) { continue }
+                    selectInstance.setState(RECEIVER_ELEMENT)
+                    return null
+                } else {
+                    cont as SelectInstance<*>
+                    val status = cont.trySelect(this, element!!, selectInstance)
+                    if (status == SelectInstance.TRY_SELECT_FAIL) continue
+                    if (status == SelectInstance.TRY_SELECT_SUCCESS) {
+                        selectInstance.setState(RECEIVER_ELEMENT)
+                        return null
+                    }
+                    if (status == SelectInstance.TRY_SELECT_CONFIRM) {
+                        return SelectInstance.REG_RESULT_CONFIRMED
+                    }
+                }
+            } else {
+                tail = getTail(s / segmentSize, tail)
+                tail.putCont(i, selectInstance)
+                if (!tail.casElement(i, null, element!!)) {
+                    tail.putCont(i, null)
+                    continue
+                }
+                return RegResult(tail, i)
+            }
+        }
     }
 
     private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?): RegResult? {
-        return null
+        while (true) {
+            var head = head()
+            var tail = tail()
+
+            val h1 = _highest.value
+            val l = _lowest.addAndGet(1L)
+            val h2 = _highest.value
+            check(h1 == h2)
+
+            val ls = l ushr _counterOffset
+            val lr = l and _counterMask
+            val hs = h1 ushr _counterOffset
+            val hr = h1 and _counterMask
+            val s = ls + (hs shl (_counterOffset - 1))
+            val r = lr + (hr shl (_counterOffset - 1))
+
+            val i = (r % segmentSize).toInt()
+
+            if (r <= s) {
+                head = getHead(r / segmentSize, head)
+                val el = readElement(head, i)
+                if (el == BROKEN) continue
+                head.putElement(i, BROKEN)
+
+                val cont = head.getCont(i)
+                head.putCont(i, null)
+
+                if (cont == TAKEN_CONTINUATION) continue
+
+                if (cont is CancellableContinuation<*>) {
+                    cont as CancellableContinuation<Unit>
+                    if (!cont.tryResumeCont(Unit)) continue
+                    selectInstance.setState(el)
+                    return null
+                } else {
+                    cont as SelectInstance<*>
+                    val status = cont.trySelect(this, RECEIVER_ELEMENT, selectInstance)
+                    if (status == SelectInstance.TRY_SELECT_FAIL) continue
+                    if (status == SelectInstance.TRY_SELECT_SUCCESS) {
+                        selectInstance.setState(el)
+                        return null
+                    }
+                    if (status == SelectInstance.TRY_SELECT_CONFIRM) {
+                        return SelectInstance.REG_RESULT_CONFIRMED
+                    }
+                }
+            } else {
+                tail = getTail(r / segmentSize, tail)
+                tail.putCont(i, selectInstance)
+                if (!tail.casElement(i, null, RECEIVER_ELEMENT)) {
+                    tail.putCont(i, null)
+                    continue
+                }
+                return RegResult(tail, i)
+            }
+        }
     }
 
     internal companion object {
