@@ -466,10 +466,8 @@ class RendezvousChannel<E> : Channel<E> {
 
 
 
-    override val onSend: Param1RegInfo<Unit>
-        get() = Param1RegInfo<Unit>(this, RendezvousChannel<*>::regSelectSend, Companion::actOnSendAndOnReceive)
-    override val onReceive: Param0RegInfo<E>
-        get() = Param0RegInfo<E>(this, RendezvousChannel<*>::regSelectReceive, Companion::actOnSendAndOnReceive)
+    override val onSend: Param1RegInfo<Unit> = Param1RegInfo<Unit>(this, RendezvousChannel<*>::regSelectSend, Companion::actOnSendAndOnReceive)
+    override val onReceive: Param0RegInfo<E> = Param0RegInfo<E>(this, RendezvousChannel<*>::regSelectReceive, Companion::actOnSendAndOnReceive)
 
     private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?): RegResult? {
         while (true) {
