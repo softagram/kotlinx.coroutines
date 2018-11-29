@@ -1,24 +1,25 @@
 package channels_new
 
-import kotlinx.atomicfu.AtomicLong
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendAtomicCancellableCoroutine
 import java.util.*
 import kotlin.coroutines.Continuation
-import kotlin.math.min
 
+@UseExperimental(InternalCoroutinesApi::class)
 suspend inline fun <R> select(crossinline builder: SelectBuilder<R>.() -> Unit): R {
     val select = SelectInstance<R>()
-    builder(select)
-    return select.select()
+    val result = suspendAtomicCancellableCoroutine<Any> { curCont ->
+        select.cont = curCont
+        builder(select)
+    }
+    return select.completeSelect(result)
 }
 
+@InternalCoroutinesApi
 suspend inline fun <R> selectUnbiased(crossinline builder: SelectBuilder<R>.() -> Unit): R {
-    val select = SelectInstance<R>()
-    builder(select)
-    select.shuffleAlternatives()
-    return select.select()
+    return select(builder)
 }
 
 interface SelectBuilder<RESULT> {
@@ -29,6 +30,7 @@ interface SelectBuilder<RESULT> {
 }
 
 // channel, selectInstance, element -> is selected by this alternative
+@UseExperimental(InternalCoroutinesApi::class)
 typealias RegFunc = Function3<RendezvousChannel<*>, SelectInstance<*>, Any?, Unit>
 class Param0RegInfo<FUNC_RESULT>(channel: Any, regFunc: RegFunc, actFunc: ActFunc<FUNC_RESULT>)
     : RegInfo<FUNC_RESULT>(channel, regFunc, actFunc)
@@ -42,15 +44,14 @@ abstract class RegInfo<FUNC_RESULT>(
 )
 // continuation, result (usually a received element), block
 typealias ActFunc<FUNC_RESULT> = Function2<Any?, Function1<FUNC_RESULT, Any?>, Any?>
-class SelectInstance<RESULT> : SelectBuilder<RESULT> {
-    private val id = selectInstanceIdGenerator.incrementAndGet()
+@InternalCoroutinesApi
+class SelectInstance<RESULT>() : SelectBuilder<RESULT> {
+    val id = selectInstanceIdGenerator.incrementAndGet()
     private val alternatives = ArrayList<Any?>(ALTERNATIVE_SIZE * 2)
 
-    private val _state = atomic<Any?>(STATE_REG)
-    private var _result: Any? = null
+    private val _state = atomic<Any?>(null)
 
     lateinit var cont: Continuation<in Any>
-    private @Volatile var waitingFor: SelectInstance<*>? = null
 
     @JvmField var cleanable: Cleanable? = null
     @JvmField var index: Int = 0
@@ -64,20 +65,11 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
         addAlternative(this, param, block)
     }
     private fun <FUNC_RESULT> addAlternative(regInfo: RegInfo<*>, param: Any?, block: (FUNC_RESULT) -> RESULT) {
-        if (_result != null) return
+        if (isSelected()) return
         val regFunc = regInfo.regFunc
         val channel = regInfo.channel as RendezvousChannel<*> // todo FIX TYPES
         regFunc(channel, this, param)
-        if (index == TRY_SELECT_CONFIRM) {
-            alternatives.add(regInfo)
-            alternatives.add(block)
-            alternatives.add(null)
-            alternatives.add(null)
-            this._result = CONFIRMED
-        } else if (cleanable == null) {
-            val result = this._state.value
-            this._state.value = channel
-            _result = result
+        if (cleanable == null) {
             alternatives.add(regInfo)
             alternatives.add(block)
             alternatives.add(null)
@@ -99,62 +91,43 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      * (suspending if needed), then it unregisters from unselected channels,
      * and invokes the specified for the selected alternative action at last.
      */
-    suspend fun select(): RESULT {
-        val result = selectAlternative()
+    suspend fun completeSelect(result: Any?): RESULT {
         cleanNonSelectedAlternatives()
         return invokeSelectedAlternativeAction(result)
     }
-    /**
-     * After this function is invoked it is guaranteed that an alternative is selected
-     * and the corresponding channel is stored into `_state` field.
-     */
-    private suspend fun selectAlternative(): Any? {
-        if (_result != null && _result != CONFIRMED) {
-            return _result
-        } else {
-            return suspendAtomicCancellableCoroutine<Any> { cont ->
-                this.cont = cont
-                this._state.value = STATE_WAITING
+
+
+    fun isSelected(): Boolean = readState(null) != null
+    private fun readState(allowedUnprocessedDesc: Any?): Any? {
+        while (true) { // CAS loop
+            val state = _state.value
+            if (state === null || state === allowedUnprocessedDesc || state !is SelectDesc)
+                return state
+            if (state.invoke()) {
+                return state
+            } else if (_state.compareAndSet(state, null)) {
+                return null
             }
         }
     }
-
-
-    fun trySelect(channel: Any, element: Any, selectFrom: SelectInstance<*>?): Int {
-        var state = _state.value
-        while (state == STATE_REG) {
-            if (selectFrom != null) {
-                selectFrom.waitingFor = this
-                if (shouldConfirm(selectFrom, selectFrom, selectFrom.id)) {
-                    selectFrom.waitingFor = null
-                    return TRY_SELECT_CONFIRM
-                }
-            }
-            state = _state.value
+    fun trySetDescriptor(desc: Any): Boolean {
+        while (true) {
+            val state = readState(desc)
+            if (state === desc) return true
+            if (state != null) return false
+            if (_state.compareAndSet(null, desc)) return true
         }
-        selectFrom?.waitingFor = null
-
-        if (state != STATE_WAITING) { return TRY_SELECT_FAIL }
-        if (!_state.compareAndSet(STATE_WAITING, channel)) { return TRY_SELECT_FAIL }
-        val cont = this.cont as CancellableContinuation<in Any>
-        return if (cont.tryResumeCont(element)) { TRY_SELECT_SUCCESS } else TRY_SELECT_FAIL
     }
-
-    private fun shouldConfirm(start: SelectInstance<*>, cur: SelectInstance<*>, min: Long): Boolean {
-        val next = cur.waitingFor ?: return false
-        val min = min(min, next.id)
-        if (next == start) return min == start.id
-        return shouldConfirm(start, next, min)
+    fun resetState(desc: Any) {
+        _state.compareAndSet(desc, null)
     }
-
-
 
 
     /**
      * This function removes this `SelectInstance` from the
      * waiting queues of other alternatives.
      */
-    private fun cleanNonSelectedAlternatives() {
+    fun cleanNonSelectedAlternatives() {
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
             val cleanable = alternatives[i + 3]
             val index = alternatives[i + 2]
@@ -169,7 +142,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      * Gets the act function and the block for the selected alternative and invoke it
      * with the specified result.
      */
-    private fun invokeSelectedAlternativeAction(result: Any?): RESULT {
+    fun invokeSelectedAlternativeAction(result: Any?): RESULT {
         val i = selectedAlternativeIndex()
         val actFunc = (alternatives[i] as RegInfo<*>).actFunc as ActFunc<in Any>
         val block = alternatives[i + 1] as (Any?) -> RESULT
@@ -181,23 +154,63 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     private fun selectedAlternativeIndex(): Int {
         val channel = _state.value!!
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-            if ((alternatives[i] as RegInfo<*>).channel === channel) return i
+            val ch = if (channel is SelectDesc) channel.channel else channel
+            if ((alternatives[i] as RegInfo<*>).channel === ch) return i
         }
         error("Channel $channel is not found")
     }
+
     companion object {
         private val selectInstanceIdGenerator = java.util.concurrent.atomic.AtomicLong(0L)
         // Number of items to be stored for each alternative in `alternatives` array.
         const val ALTERNATIVE_SIZE = 4
+    }
+}
 
-        const val TRY_SELECT_SUCCESS = 0
-        const val TRY_SELECT_FAIL = 1
-        const val TRY_SELECT_CONFIRM = -1
 
-        @JvmStatic  val STATE_REG = Any()
-        @JvmStatic  val STATE_WAITING = Any()
-        @JvmStatic  val STATE_DONE = Any()
-
-        @JvmStatic  val CONFIRMED = Any()
+class SelectDesc @InternalCoroutinesApi constructor(@JvmField val channel: Any, @JvmField val selectInstance: SelectInstance<*>, @JvmField val anotherCont: Any) {
+    @JvmField @Volatile var _status: Byte = STATUS_UNDECIDED
+    @InternalCoroutinesApi
+    fun invoke(): Boolean {
+        // Optimization: check this descriptor's status.
+        val status = _status
+        if (status != STATUS_UNDECIDED) return status == STATUS_SUCCEED
+        // Set the descriptor to `SelectInstance`s.
+        var failed = false
+        if (anotherCont is SelectInstance<*>) {
+            if (selectInstance.id < anotherCont.id) {
+                if (selectInstance.trySetDescriptor(this)) {
+                    if (!anotherCont.trySetDescriptor(this)) {
+                        failed = true
+                        selectInstance.resetState(this)
+                    }
+                } else { failed = true }
+            } else {
+                if (anotherCont.trySetDescriptor(this)) {
+                    if (!selectInstance.trySetDescriptor(this)) {
+                        failed = true
+                        anotherCont.resetState(this)
+                    }
+                } else { failed = true }
+            }
+        } else {
+            anotherCont as CancellableContinuation<*>
+            if (!selectInstance.trySetDescriptor(this)) {
+                failed = true
+            }
+        }
+        // Check if failed
+        if (failed) {
+            _status = STATUS_FAILED
+            return false
+        } else {
+            _status = STATUS_SUCCEED
+            return true
+        }
+    }
+    companion object {
+        const val STATUS_UNDECIDED: Byte = 0
+        const val STATUS_SUCCEED: Byte = 1
+        const val STATUS_FAILED: Byte = 2
     }
 }
