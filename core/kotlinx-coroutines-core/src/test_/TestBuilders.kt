@@ -44,9 +44,9 @@ import kotlin.coroutines.CoroutineContext
  *
  * @throws UncompletedCoroutinesError If the [testBody] does not complete (or cancel) all coroutines that it launches
  * (including coroutines suspended on await).
- * @throws UnhandledExceptionsError If an uncaught exception is not handled by [testBody]
+ * @throws Throwable If an uncaught exception was captured by this test it will be rethrown.
  *
- * @param dispatcher An optional dispatcher, during [testBody] execution [TestCoroutineDispatcher.dispatchImmediately] will be set to false
+ * @param context An optional dispatcher, during [testBody] execution [DelayController.dispatchImmediately] will be set to false
  * @param testBody The code of the unit-test.
  *
  * @see [runBlockingTest]
@@ -106,10 +106,15 @@ fun TestCoroutineScope.asyncTest(testBody: TestCoroutineScope.() -> Unit) =
  *
  * ```
  *
- * [runBlockingTest] will allow tests to finish successfully while started coroutines are unfinished. In addition unhandled
- * exceptions inside coroutines will not fail the test.
+ * This method requires that all coroutines launched inside [testBody] complete, or are cancelled, as part of the test
+ * conditions.
  *
- * @param dispatcher An optional dispatcher, during [testBody] execution [TestCoroutineDispatcher.dispatchImmediately] will be set to true
+ * In unhandled exceptions inside coroutines will not fail the test.
+ *
+ * @throws UncompletedCoroutinesError If the [testBody] does not complete (or cancel) all coroutines that it launches
+ * (including coroutines suspended on await).
+ *
+ * @param context An optional context, during [testBody] execution [DelayController.dispatchImmediately] will be set to true
  * @param testBody The code of the unit-test.
  *
  * @see [asyncTest]
@@ -127,39 +132,29 @@ fun runBlockingTest(context: CoroutineContext? = null, testBody: suspend Corouti
             scope.testBody()
             scope.cleanupTestCoroutines()
         }
+        val job = checkNotNull(safeContext[Job]) { "Job required for asyncTest" }
+        val activeChildren = job.children.filter { it.isActive }.toList()
+        if (activeChildren.isNotEmpty()) {
+            throw UncompletedCoroutinesError("Test finished with active jobs: ${activeChildren}")
+        }
     } finally {
         dispatcher.dispatchImmediately = oldDispatch
     }
 }
 
 /**
- * Convenience method for calling runBlocking on an existing [TestCoroutineScope].
- *
- * [block] will be executed in immediate execution mode, similar to [runBlockingTest].
+ * Convenience method for calling [runBlockingTest] on an existing [TestCoroutineScope].
  */
-fun <T> TestCoroutineScope.runBlocking(block: suspend CoroutineScope.() -> T): T {
-    val oldDispatch = dispatchImmediately
-    dispatchImmediately = true
-    try {
-        return runBlocking(coroutineContext, block)
-    } finally {
-        dispatchImmediately = oldDispatch
-    }
+fun TestCoroutineScope.runBlockingTest(block: suspend CoroutineScope.() -> Unit) {
+    runBlockingTest(coroutineContext, block)
 }
 
 /**
- * Convenience method for calling runBlocking on an existing [TestCoroutineDispatcher].
+ * Convenience method for calling [runBlockingTest] on an existing [TestCoroutineDispatcher].
  *
- * [block] will be executed in immediate execution mode, similar to [runBlockingTest].
  */
-fun <T> TestCoroutineDispatcher.runBlocking(block: suspend CoroutineScope.() -> T): T {
-    val oldDispatch = dispatchImmediately
-    dispatchImmediately = true
-    try {
-        return runBlocking(this, block)
-    } finally {
-        dispatchImmediately = oldDispatch
-    }
+fun TestCoroutineDispatcher.runBlockingTest(block: suspend CoroutineScope.() -> Unit) {
+    runBlockingTest(this, block)
 }
 
 private fun CoroutineContext?.checkArguments(): Pair<CoroutineContext, ContinuationInterceptor> {
@@ -167,18 +162,14 @@ private fun CoroutineContext?.checkArguments(): Pair<CoroutineContext, Continuat
 
     val dispatcher = safeContext[ContinuationInterceptor].run {
         this?.let {
-            if (this !is DelayController) {
-                throw IllegalArgumentException("Dispatcher must implement DelayController")
-            }
+            require(this is DelayController) { "Dispatcher must implement DelayController" }
         }
         this ?: TestCoroutineDispatcher()
     }
 
     val exceptionHandler = safeContext[CoroutineExceptionHandler].run {
         this?.let {
-            if (this !is ExceptionCaptor) {
-                throw IllegalArgumentException("coroutineExceptionHandler must implement ExceptionCaptor")
-            }
+            require(this is ExceptionCaptor) { "coroutineExceptionHandler must implement ExceptionCaptor" }
         }
         this ?: TestCoroutineExceptionHandler()
     }

@@ -269,8 +269,8 @@ class TestRunBlockingTest {
         job.join()
     }
 
-    @Test
-    fun whenACoroutineLeaks_thereIsNoError() = runBlockingTest {
+    @Test(expected = UncompletedCoroutinesError::class)
+    fun whenACoroutineLeaks_errorIsThrown() = runBlockingTest {
         val uncompleted = CompletableDeferred<Unit>()
         launch {
             uncompleted.await()

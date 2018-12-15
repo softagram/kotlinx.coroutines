@@ -13,7 +13,7 @@ class TestTestBuilders {
     @Test
     fun scopeRunBlocking_passesDispatcher() {
         val scope = TestCoroutineScope()
-        scope.runBlocking {
+        scope.runBlockingTest {
             assertSame(scope.coroutineContext[ContinuationInterceptor], coroutineContext[ContinuationInterceptor])
         }
     }
@@ -21,7 +21,7 @@ class TestTestBuilders {
     @Test
     fun dispatcherRunBlocking_passesDispatcher() {
         val dispatcher = TestCoroutineDispatcher()
-        dispatcher.runBlocking {
+        dispatcher.runBlockingTest {
             assertSame(dispatcher, coroutineContext[ContinuationInterceptor])
         }
     }
@@ -34,7 +34,7 @@ class TestTestBuilders {
             3
         }
 
-        scope.runBlocking {
+        scope.runBlockingTest {
             assertRunsFast {
                 assertEquals(3, deferred.await())
             }
@@ -50,7 +50,7 @@ class TestTestBuilders {
             3
         }
 
-        dispatcher.runBlocking {
+        dispatcher.runBlockingTest {
             assertRunsFast {
                 assertEquals(3, deferred.await())
             }
@@ -60,7 +60,7 @@ class TestTestBuilders {
     @Test
     fun scopeRunBlocking_disablesImmedateOnExit() {
         val scope = TestCoroutineScope()
-        scope.runBlocking {
+        scope.runBlockingTest {
             assertRunsFast {
                 delay(SLOW)
             }
@@ -109,7 +109,7 @@ class TestTestBuilders {
         val scope = TestCoroutineScope()
         var calls = 0
 
-        val result = scope.runBlocking {
+        scope.runBlockingTest {
             delay(1_000)
             calls++
             asyncTest {
@@ -118,13 +118,13 @@ class TestTestBuilders {
                     calls++
                 }
                 assertTrue(job.isActive)
-                runUntilIdle()
+                advanceUntilIdle()
                 assertFalse(job.isActive)
                 calls++
             }
             ++calls
         }
 
-        assertEquals(4, result)
+        assertEquals(4, calls)
     }
 }

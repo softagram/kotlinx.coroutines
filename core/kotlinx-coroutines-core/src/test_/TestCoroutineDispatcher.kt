@@ -3,7 +3,6 @@ package kotlinx.coroutines.test
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.ThreadSafeHeap
 import kotlinx.coroutines.internal.ThreadSafeHeapNode
-import java.lang.IllegalStateException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 
@@ -24,8 +23,8 @@ interface DelayController {
     /**
      * Moves the Dispatcher's virtual clock forward by a specified amount of time.
      *
-     * The returned delay-time can be larger than the specified delay-time if the code
-     * under test contains *blocking* Coroutines.
+     * The amount the clock is progressed may be larger than the requested delayTime if the code under test uses
+     * blocking coroutines.
      *
      * @param delayTime The amount of time to move the CoroutineContext's clock forward.
      * @param unit The [TimeUnit] in which [delayTime] and the return value is expressed.
@@ -34,20 +33,18 @@ interface DelayController {
     fun advanceTimeBy(delayTime: Long, unit: TimeUnit = TimeUnit.MILLISECONDS): Long
 
     /**
-     * Moves the current virtual clock forward until the next pending delay.
-     *
-     * Any pending immediate dispatches will be executed, and the clock will be advanced to the next delayed dispatch.
+     * Moves the current virtual clock forward just far enough so the next delay will return.
      *
      * @return the amount of delay-time that this Dispatcher's clock has been forwarded.
      */
     fun advanceTimeToNextDelayed(): Long
 
     /**
-     * Immediately execute all pending tasks and advance the virtual clock-time to the latest delay.
+     * Immediately execute all pending tasks and advance the virtual clock-time to the last delay.
      *
      * @return the amount of delay-time that this Dispatcher's clock has been forwarded.
      */
-    fun runUntilIdle(): Long
+    fun advanceUntilIdle(): Long
 
     /**
      * Run any tasks that are pending at or before the current virtual clock-time.
@@ -129,7 +126,7 @@ class TestCoroutineDispatcher:
             field = value
             if (value) {
                 // there may already be tasks from setup code we need to run
-                runUntilIdle()
+                advanceUntilIdle()
             }
         }
 
@@ -225,7 +222,7 @@ class TestCoroutineDispatcher:
         return time - oldTime
     }
 
-    override fun runUntilIdle(): Long {
+    override fun advanceUntilIdle(): Long {
         val oldTime = time
         while(!queue.isEmpty) {
             advanceTimeToNextDelayed()

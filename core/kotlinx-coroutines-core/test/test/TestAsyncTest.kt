@@ -219,7 +219,7 @@ class TestAsyncTest {
         }
     }
 
-    @Test(expected = AssertionError::class)
+    @Test(expected = IllegalAccessError::class)
     fun testWithTestContextThrowingAnAssertionError() = asyncTest {
         val expectedError = IllegalAccessError("hello")
 
@@ -240,7 +240,6 @@ class TestAsyncTest {
         }
 
         runCurrent()
-        rethrowUncaughtCoroutineException()
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -255,8 +254,6 @@ class TestAsyncTest {
 
         advanceTimeBy(delay)
         assertTrue(job.isCancelled)
-
-        rethrowUncaughtCoroutineException()
     }
 
     @Test
@@ -367,7 +364,7 @@ class TestAsyncTest {
         }
     }
 
-    @Test(expected = UnhandledExceptionsError::class)
+    @Test(expected = IllegalArgumentException::class)
     fun asyncTest_withUnhandledExceptions_failsTest() {
         asyncTest {
             launch {
@@ -422,7 +419,7 @@ class TestAsyncTest {
                 }
             }
 
-            this.runBlocking {
+            this.runBlockingTest {
                 // the only way to make the thread switch is to use runBlocking and await()
                 assertEquals(3, deferred.await())
             }
@@ -447,7 +444,7 @@ class TestAsyncTest {
                     3
                 }
             }
-            runUntilIdle()
+            advanceUntilIdle()
             assertEquals(3, deferred.getCompleted())
         }
     }
