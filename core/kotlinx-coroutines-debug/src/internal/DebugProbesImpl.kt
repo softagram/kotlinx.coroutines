@@ -76,22 +76,31 @@ internal object DebugProbesImpl {
 
     private fun Job.build(map: Map<Job, CoroutineState>, builder: StringBuilder, indent: String) {
         val state = map[this]
-        builder.append(indent)
-        @Suppress("DEPRECATION_ERROR")
-        val str = if (this !is JobSupport) toString() else toDebugString()
-        if (state == null) {
-            @Suppress("INVISIBLE_REFERENCE")
-            if (this !is kotlinx.coroutines.internal.ScopeCoroutine<*>) { // Do not print scoped coroutines
-                builder.append("$str\n")
-            }
-        } else {
-            val element = state.lastObservedStackTrace().firstOrNull()
-            val contState = state.state
-            builder.append("$str, continuation is $contState at line $element\n")
-        }
+        val indentDelta = if (appendCoroutine(builder, state, indent)) "\t" else ""
+        // Append children with new indent
         for (child in children) {
-            child.build(map, builder, indent + "\t")
+            child.build(map, builder, indent + indentDelta)
         }
+    }
+
+    /**
+     * Appends the current job to the resulting string builder if it does not represent scope coroutine.
+     * Returns whether the job was appended to [builder].
+     */
+    @Suppress("INVISIBLE_REFERENCE", "DEPRECATION_ERROR") // JobSupport and ScopeCoroutine
+    private fun Job.appendCoroutine(builder: StringBuilder, state: CoroutineState?, indent: String): Boolean {
+        val str = if (this !is JobSupport) toString() else toDebugString()
+        if (state == null) { // Append coroutine without stacktrace
+            val isNotScope = this !is kotlinx.coroutines.internal.ScopeCoroutine<*>
+            if (isNotScope) builder.append("$indent$str\n")
+            return isNotScope
+        }
+
+        // Append coroutine with its last stacktrace element
+        val element = state.lastObservedStackTrace().firstOrNull()
+        val contState = state.state
+        builder.append("$indent$str, continuation is $contState at line $element\n")
+        return true
     }
 
     @Synchronized
