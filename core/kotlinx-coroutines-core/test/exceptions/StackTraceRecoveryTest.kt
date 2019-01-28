@@ -6,8 +6,8 @@ package kotlinx.coroutines.exceptions
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.selects.*
 import org.junit.Test
-import java.io.*
 import java.util.concurrent.*
 import kotlin.test.*
 
@@ -188,8 +188,63 @@ class StackTraceRecoveryTest : TestBase() {
         deferred.join()
     }
 
+    public class TrickyException() : Throwable() {
+        // To be sure ctor is never invoked
+        @Suppress("UNUSED", "UNUSED_PARAMETER")
+        private constructor(message: String, cause: Throwable): this() {
+            error("Should never be called")
+        }
+
+        override fun initCause(cause: Throwable?): Throwable {
+            error("Can't call initCause")
+        }
+    }
+
+    @Test
+    fun testThrowingInitCause() = runTest {
+        val deferred = async(NonCancellable) {
+            expect(2)
+            throw TrickyException()
+        }
+
+        try {
+            expect(1)
+            deferred.await()
+        } catch (e: TrickyException) {
+            assertNull(e.cause)
+            finish(3)
+        }
+    }
+
     private suspend fun outerScopedMethod(deferred: Deferred<Nothing>, vararg traces: String) = coroutineScope {
         innerMethod(deferred, *traces)
         assertTrue(true)
+    }
+
+    @Test
+    fun testSelect() = runTest {
+        expect(1)
+        val result = kotlin.runCatching { doSelect() }
+        expect(3)
+        verifyStackTrace(result.exceptionOrNull()!!,
+            "kotlinx.coroutines.RecoverableTestException\n" +
+                "\tat kotlinx.coroutines.exceptions.StackTraceRecoveryTest\$doSelect\$\$inlined\$select\$lambda\$1.invokeSuspend(StackTraceRecoveryTest.kt:211)\n" +
+                "\t(Coroutine boundary)\n" +
+                "\tat kotlinx.coroutines.exceptions.StackTraceRecoveryTest\$testSelect\$1.invokeSuspend(StackTraceRecoveryTest.kt:199)\n" +
+                "Caused by: kotlinx.coroutines.RecoverableTestException\n" +
+                "\tat kotlinx.coroutines.exceptions.StackTraceRecoveryTest\$doSelect\$\$inlined\$select\$lambda\$1.invokeSuspend(StackTraceRecoveryTest.kt:211)\n" +
+                "\tat kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:32)")
+        finish(4)
+    }
+
+    private suspend fun doSelect(): Int {
+        val job = CompletableDeferred(Unit)
+        return select {
+            job.onJoin {
+                yield()
+                expect(2)
+                throw RecoverableTestException()
+            }
+        }
     }
 }
