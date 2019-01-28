@@ -12,9 +12,12 @@ internal object MainDispatcherLoader {
     private fun loadMainDispatcher(): MainCoroutineDispatcher {
         return try {
             val factories = MainDispatcherFactory::class.java.let { clz ->
-                ServiceLoader.load(clz, clz.classLoader).toList()
+                try {
+                    loadProviders(clz, clz.classLoader).toList()
+                } catch (e: ServiceConfigurationError) {
+                    ServiceLoader.load(clz, clz.classLoader).toList()
+                }
             }
-
             factories.maxBy { it.loadPriority }?.tryCreateDispatcher(factories)
                 ?: MissingMainCoroutineDispatcher(null)
         } catch (e: Throwable) {
